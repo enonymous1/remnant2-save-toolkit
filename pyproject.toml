@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remnant2-save-toolkit"
+version = "2.0.0"
+description = "Find and back up Remnant 2 saves on Steam and Microsoft Store / Xbox (WGS). No save conversion."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "enonymous1" }]
+keywords = ["remnant-2", "save-files", "steam", "xbox", "wgs", "backup", "cli", "pyqt6"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Games/Entertainment",
+]
+dependencies = []
+
+[project.optional-dependencies]
+gui = [
+    "PyQt6>=6.5",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+remnant2-saves = "remnant2_save_toolkit.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/enonymous1/remnant2-save-toolkit"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "PyQt6.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+markers = [
+    "gui: tests that need PyQt6 and run offscreen",
+]
