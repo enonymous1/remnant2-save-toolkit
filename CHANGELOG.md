@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.0.2] - 2026-11-01
+
+### Fixed
+
+- **The GUI could not open at all in v2.0.1.** The close-game-note
+  edit in v2.0.1 accidentally deleted the
+  `self.find_button = QPushButton("Find saves")` line from
+  `FinderScreen.__init__`, so constructing any finder screen raised
+  `AttributeError: 'FinderScreen' object has no attribute
+  'find_button'`. Windows CI caught it as 8 errored GUI tests; the
+  local gates could not, because the GUI tests skip on this box
+  (PyQt6's libEGL is absent) and Windows CI is their gate. The line
+  is restored, and the fix was verified with a throwaway stub-Qt
+  harness that constructs `FinderScreen` and runs a find (the harness
+  reproduces the exact v2.0.1 `AttributeError` on the old code and
+  passes on the fixed code; it is not shipped, because a stub test
+  suite would be more fragile than the Windows CI gate it imitates).
+  This was not a test-only failure: in v2.0.1 the GUI itself crashed
+  on open, so do not ship or tag v2.0.1 on its own — v2.0.2
+  supersedes it.
+
 ## [2.0.1] - 2026-10-31
 
 Staff-review fixes to v2.0.0. No behaviour is removed; two behaviours

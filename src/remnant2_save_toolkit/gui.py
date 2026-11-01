@@ -92,6 +92,8 @@ class FinderScreen(QWidget):
         close_game = QLabel(CLOSE_GAME_NOTE)
         close_game.setWordWrap(True)
         layout.addWidget(close_game)
+
+        self.find_button = QPushButton("Find saves")
         self.find_button.clicked.connect(self._on_find)
         layout.addWidget(self.find_button)
 
