@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.0.3] - 2026-11-01
+
+### Fixed
+
+- **Core CI job no longer crashes pytest with INTERNALERROR.**
+  The v2.0.1 registry test monkeypatched ``os.name`` to ``"nt"`` to
+  reach the Windows branch of ``_registry_steam_path``. That is
+  unsafe: ``pathlib`` selects its flavour from ``os.name``, and on
+  Python 3.11 a patched ``"nt"`` makes ``Path(...)`` raise
+  ``NotImplementedError`` ("cannot instantiate 'WindowsPath' on your
+  system"). The test therefore failed on the 3.11 runners, and
+  because the monkeypatch is still active while pytest formats a
+  failure report, formatting the failure crashed pytest itself
+  (``INTERNALERROR`` in ``_pytest/nodes.py``), followed by a second
+  crash writing the pytest cache at session finish. It passed
+  locally only because Python 3.12's ``pathlib`` tolerates
+  instantiating a Windows path on POSIX, so the bug was
+  version-dependent and invisible here. ``_registry_steam_path``
+  now takes an explicit ``platform_name`` parameter (defaulting to
+  ``os.name``), the test uses it, and no test patches ``os.name``
+  anymore. No behaviour changes on any platform: the default call
+  path is identical.
+
 ## [2.0.2] - 2026-11-01
 
 ### Fixed

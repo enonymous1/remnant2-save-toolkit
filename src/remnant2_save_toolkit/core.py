@@ -200,14 +200,23 @@ def default_user_profile() -> Path:
     return Path.home()
 
 
-def _registry_steam_path() -> Path | None:
+def _registry_steam_path(platform_name: str | None = None) -> Path | None:
     """Steam's install path from the Windows registry, when available.
 
     ``winreg`` is loaded through :func:`importlib.import_module` so
     static checking on non-Windows platforms does not need its
     Windows-only attribute stubs.
+
+    *platform_name* defaults to ``os.name`` and exists so tests can
+    exercise the Windows branch without monkeypatching ``os.name``:
+    patching it is unsafe, because ``pathlib`` selects its flavour
+    from ``os.name``. On Python 3.11 a patched ``"nt"`` makes
+    ``Path(...)`` raise ``NotImplementedError`` ("cannot instantiate
+    'WindowsPath' on your system"), and the patch is still active
+    while pytest formats a failure report, which turns one failed
+    test into a pytest INTERNALERROR.
     """
-    if os.name != "nt":
+    if (platform_name if platform_name is not None else os.name) != "nt":
         return None
     try:
         winreg = importlib.import_module("winreg")

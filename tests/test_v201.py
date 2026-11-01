@@ -147,6 +147,12 @@ def test_dedupe_by_path_ignores_file_list_differences() -> None:
 
 
 def test_registry_path_via_fake_winreg(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Never monkeypatch os.name to reach this branch: pathlib selects
+    # its flavour from os.name, and on Python 3.11 a patched "nt" makes
+    # Path(...) raise NotImplementedError, which then crashes pytest
+    # itself while formatting the failure (INTERNALERROR). The
+    # platform_name parameter exists precisely so this test does not
+    # have to.
     class _FakeKey:
         def __enter__(self) -> _FakeKey:
             return self
@@ -159,9 +165,9 @@ def test_registry_path_via_fake_winreg(monkeypatch: pytest.MonkeyPatch) -> None:
         OpenKey=lambda *args: _FakeKey(),
         QueryValueEx=lambda key, name: (r"C:\Steam", 1),
     )
-    monkeypatch.setattr(os, "name", "nt")
     monkeypatch.setitem(sys.modules, "winreg", fake)
-    assert core._registry_steam_path() == Path(r"C:\Steam")
+    assert core._registry_steam_path(platform_name="nt") == Path(r"C:\Steam")
+    assert core._registry_steam_path(platform_name="posix") is None
 
 
 def test_backup_json_carries_schema_version(
