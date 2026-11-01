@@ -23,7 +23,9 @@ def test_find_json_on_fake_trees(steam_home: Path, wgs_packages: Path, capsys: p
         ]
     )
     assert code == 0
-    locations = json.loads(capsys.readouterr().out)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    locations = payload["locations"]
     assert [item["platform"] for item in locations] == ["steam", "xbox-wgs"]
     assert locations[0]["path"].endswith("76561198000000001")
     assert len(locations[0]["files"]) == 2

@@ -1,5 +1,86 @@
 # Changelog
 
+## [2.0.1] - 2026-10-31
+
+Staff-review fixes to v2.0.0. No behaviour is removed; two behaviours
+change deliberately and are called out below.
+
+### Fixed
+
+- **Backup failures are now always `BackupError`, never a traceback.**
+  A `mkdir` failure, a copy failure, or a manifest-write failure used
+  to escape as a bare `OSError` (and a manifest failure left a
+  destination with verified files but no manifest). All three paths now
+  convert to `BackupError` and remove the partial destination.
+- **Backups no longer follow symlinks.** A symlinked file inside a save
+  folder used to be copied as a regular file containing the target's
+  contents. Symlinked files and directories are now refused, at
+  collection time and again at copy time.
+- **Deep VDF nesting no longer crashes discovery.** The recursive VDF
+  parser is capped at 64 levels and `parse_libraryfolders_vdf` returns
+  `{}` for over-deep or otherwise unparseable documents.
+- **`--steam-root` is additive, not a replacement.** Passing one custom
+  root used to drop every default root (Program Files, registry, and
+  the Linux defaults). Extra roots are now searched first, then the
+  defaults, then VDF-declared libraries.
+- **WGS sizes now agree between views.** A WGS location's `size_bytes`
+  is the set's recursive total, matching the container view, instead of
+  the sum of only the top-level blobs. `SaveLocation` carries this as
+  `total_size_bytes`; Steam locations are unaffected.
+- **GUI labels no longer imply conversion.** The navigation and screen
+  titles were `XBOX >>> STEAM` / `STEAM >>> XBOX`; they are now
+  `Xbox (WGS) saves` / `Steam saves`, matching the no-conversion note
+  that was already on the screens.
+- **Empty folders are no longer reported as locations.** An empty
+  Steam account folder, an empty userdata `remote`, or an empty WGS
+  set used to appear in `find` output with zero files.
+- **A second WGS package is no longer dropped.** `find_wgs_containers`
+  used to return containers from only the first matching package;
+  it now returns containers from every matching package.
+- **Duplicate locations are deduplicated by path**, not by full
+  dataclass equality, so the same directory reached via two routes
+  (or re-scanned after a file changed) appears once.
+
+### Added
+
+- Exception hierarchy in `backup.py`: `InvalidBackupError` for bad
+  input and `BackupVerificationError` for a failed hash check, both
+  subclasses of `BackupError` so existing callers are unaffected.
+- Timestamp length cap (64 characters) in `validate_timestamp`.
+- `schema_version: 1` in `find` / `inspect` / `backup` JSON output.
+- `--verbose` / `--quiet` flags on the CLI, and a warnings channel:
+  permission-denied directories are logged as warnings instead of
+  silently returning no results.
+- Docstrings for previously undocumented public functions and "why"
+  comments for the `t` exclusion, the container-preference rule, the
+  double hash, the 100-suffix cap, and the naive-local timestamp.
+- `find_wgs_directories` (plural); `find_wgs_directory` is kept as a
+  backwards-compatible wrapper returning the first directory.
+- A close-the-game warning in the GUI finder screens and in the README:
+  a backup taken while the game is running can capture a half-written
+  save pair.
+- Single-source version: `pyproject.toml` reads the version from
+  `remnant2_save_toolkit.__version__` dynamically.
+- CI now tests Python 3.10 (the claimed floor), caches pip, runs
+  `mypy` on `tests` as well as `src`, and adds a packaging smoke
+  check (`python -m build` plus a wheel-existence check).
+- Ruff rules expanded from `E,F,I,W` to `E,F,I,W,B,UP,SIM`.
+- `.gitignore` now explicitly lists `.mypy_cache/`, `.ruff_cache/`,
+  `.idea/`, `.DS_Store`, and `Thumbs.db`.
+
+### Deferred, not done
+
+- **Restore** is still not implemented; it is a v2.1 feature and needs
+  the destination-safety design from the review, not a quick copy back.
+- **GUI backup still runs on the UI thread**, and `core.py` is still
+  one module (the `models.py` / `vdf.py` / `steam.py` / `wgs.py` /
+  `platforms.py` split from the review is not done). Both are
+  deliberate scope control for a patch release.
+- **Actions are still pinned to major tags**, not SHAs, in CI. Pinning
+  to a SHA that was not verified against the action's releases would
+  be worse than the major tag, so this stays open until the SHAs are
+  checked from the actions' own release pages.
+
 ## [2.0.0] - 2026-10-27
 
 Modernization of the original single-commit `ss-remnant2` utility

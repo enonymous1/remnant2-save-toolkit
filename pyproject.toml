@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "remnant2-save-toolkit"
-version = "2.0.0"
+dynamic = ["version"]
+# Version lives in exactly one place: remnant2_save_toolkit.__version__.
+# setuptools reads it from there (see [tool.setuptools.dynamic] below),
+# so a bump can never update one copy and forget the other.
 description = "Find and back up Remnant 2 saves on Steam and Microsoft Store / Xbox (WGS). No save conversion."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +30,7 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "mypy>=1.10",
+    "build>=1.0",
 ]
 
 [project.scripts]
@@ -38,12 +42,15 @@ Homepage = "https://github.com/enonymous1/remnant2-save-toolkit"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { attr = "remnant2_save_toolkit.__version__" }
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
+select = ["E", "F", "I", "W", "B", "UP", "SIM"]
 
 [tool.mypy]
 python_version = "3.10"

@@ -22,9 +22,17 @@ coverage.xml
 *.cover
 .hypothesis/
 
+# Tool caches (explicit, so the tree stays clean even without the
+# tools' own generated ignore files)
+.mypy_cache/
+.ruff_cache/
+
 # Local configuration
 .vscode/
+.idea/
 .env
+.DS_Store
+Thumbs.db
 
 # Generated outputs (never commit real saves or backups)
 output/

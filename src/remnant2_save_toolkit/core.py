@@ -18,18 +18,31 @@ Two layouts are supported:
   container directory (every subdirectory except ``t``). No save set is
   labelled "profile" or "game" by size or any other heuristic: the caller
   gets paths, file lists, and sizes, and decides for itself.
+
+A directory is only reported as a location when it actually holds save
+files. An empty Steam account folder, an empty userdata ``remote``, or
+an empty WGS set is not a location; reporting it as one would make
+"found" mean "a folder exists", which is useless to a user deciding
+what to back up.
 """
 
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 STEAM_APP_ID = "1282100"
 STEAM_GAME_FOLDER = "Remnant2"
 WGS_PACKAGE_KEYWORD = "PerfectWorldEntertainment"
+
+Platform = Literal["steam", "xbox-wgs", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -45,14 +58,26 @@ class SaveFile:
 
 @dataclass(frozen=True)
 class SaveLocation:
-    """A directory that holds one set of Remnant 2 saves."""
+    """A directory that holds one set of Remnant 2 saves.
 
-    platform: str  # "steam" or "xbox-wgs"
+    ``files`` are the files listed for the location. ``total_size_bytes``
+    is set when the finder knows a recursive total that differs from the
+    sum of ``files`` (WGS sets, whose listed files are only the
+    top-level extensionless blobs while the set may hold nested files).
+    When it is ``None``, ``size_bytes`` is simply the sum of ``files``,
+    so a Steam location and a WGS location never report two different
+    sizes for the same set through different entry points.
+    """
+
+    platform: Platform
     path: Path
     files: tuple[SaveFile, ...] = ()
+    total_size_bytes: int | None = None
 
     @property
     def size_bytes(self) -> int:
+        if self.total_size_bytes is not None:
+            return self.total_size_bytes
         return sum(item.size_bytes for item in self.files)
 
     def to_dict(self) -> dict[str, object]:
@@ -99,13 +124,25 @@ class WgsContainer:
 
 
 def _safe_listdir(path: Path) -> list[Path]:
+    """Sorted children of *path*, or ``[]`` when it cannot be listed.
+
+    A missing directory is silent: callers probe candidate paths, and
+    "not there" is an ordinary answer. A permission error is logged as
+    a warning instead, because it means a location was *skipped*, not
+    that no saves exist, and silently returning ``[]`` would make the
+    two indistinguishable.
+    """
     try:
         return sorted(path.iterdir())
+    except PermissionError:
+        logger.warning("Cannot list directory (permission denied): %s", path)
+        return []
     except OSError:
         return []
 
 
 def _safe_file_size(path: Path) -> int:
+    """Size of *path*, or ``0`` when it disappears or cannot be read."""
     try:
         return path.stat().st_size
     except OSError:
@@ -113,6 +150,12 @@ def _safe_file_size(path: Path) -> int:
 
 
 def _directory_size(path: Path) -> int:
+    """Recursive size of *path*, for display only.
+
+    Used for WGS sets, whose blobs can nest below the top level. A
+    listing failure returns 0 for the whole directory, so callers must
+    not treat this as an exact accounting figure.
+    """
     total = 0
     try:
         entries = list(path.rglob("*"))
@@ -131,6 +174,25 @@ def _save_files(directory: Path) -> tuple[SaveFile, ...]:
         if entry.is_file():
             found.append(SaveFile(path=entry, size_bytes=_safe_file_size(entry)))
     return tuple(found)
+
+
+def _dedupe_by_path(locations: list[SaveLocation]) -> list[SaveLocation]:
+    """Drop duplicate locations that name the same directory.
+
+    Deduplication is by path, not by full dataclass equality: the same
+    directory reached through two routes (or re-scanned after a file
+    changed) is one location, even if its file list differs. On Windows
+    the key is case-folded, because ``Steam`` and ``steam`` are the same
+    folder there and different folders elsewhere.
+    """
+    seen: set[str] = set()
+    unique: list[SaveLocation] = []
+    for location in locations:
+        key = os.path.normcase(str(location.path)) if os.name == "nt" else str(location.path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(location)
+    return unique
 
 
 def default_user_profile() -> Path:
@@ -165,8 +227,10 @@ def default_steam_roots() -> list[Path]:
     """Candidate Steam install roots, in the order they should be tried."""
     roots: list[Path] = []
     if os.name == "nt":
-        program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-        program_files = os.environ.get("ProgramW6432", r"C:\Program Files")
+        # Uppercase names: Windows environment lookup is case-insensitive,
+        # so these resolve the same variables as the mixed-case spellings.
+        program_files_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+        program_files = os.environ.get("PROGRAMW6432", r"C:\Program Files")
         roots.append(Path(program_files_x86) / "Steam")
         roots.append(Path(program_files) / "Steam")
         registry_path = _registry_steam_path()
@@ -195,8 +259,17 @@ def default_packages_dir() -> Path | None:
 
 # --- libraryfolders.vdf -------------------------------------------------
 
+_MAX_VDF_DEPTH = 64
+
 
 def _vdf_tokens(text: str) -> list[str]:
+    """Tokenise a VDF document into quoted strings and braces.
+
+    Returns ``[]`` for anything unexpected (an unterminated string, a
+    stray character): the caller treats that as "unparseable" rather
+    than raising, so a malformed file never takes down discovery.
+    ``//`` comments are skipped.
+    """
     tokens: list[str] = []
     i = 0
     while i < len(text):
@@ -220,7 +293,15 @@ def _vdf_tokens(text: str) -> list[str]:
     return tokens
 
 
-def _parse_vdf_object(tokens: list[str], pos: int) -> tuple[dict[str, object], int]:
+def _parse_vdf_object(tokens: list[str], pos: int, depth: int = 0) -> tuple[dict[str, object], int]:
+    """Parse one VDF object starting after its opening brace.
+
+    The depth cap exists because this parser is recursive: a hostile
+    or corrupted file with thousands of nested objects would otherwise
+    crash discovery with ``RecursionError`` instead of being ignored.
+    """
+    if depth > _MAX_VDF_DEPTH:
+        raise ValueError("VDF nesting too deep")
     result: dict[str, object] = {}
     while pos < len(tokens) and tokens[pos] != "}":
         key = tokens[pos]
@@ -228,7 +309,7 @@ def _parse_vdf_object(tokens: list[str], pos: int) -> tuple[dict[str, object], i
         if pos >= len(tokens):
             break
         if tokens[pos] == "{":
-            value, pos = _parse_vdf_object(tokens, pos + 1)
+            value, pos = _parse_vdf_object(tokens, pos + 1, depth + 1)
             if pos < len(tokens) and tokens[pos] == "}":
                 pos += 1
             result[key] = value
@@ -247,11 +328,15 @@ def parse_libraryfolders_vdf(text: str) -> dict[str, object]:
     tokens = _vdf_tokens(text)
     if len(tokens) < 2 or tokens[0] != "libraryfolders" or tokens[1] != "{":
         return {}
-    parsed, _ = _parse_vdf_object(tokens, 2)
+    try:
+        parsed, _ = _parse_vdf_object(tokens, 2)
+    except (RecursionError, ValueError):
+        return {}
     return parsed
 
 
 def _collect_vdf_paths(node: object, collected: list[str]) -> None:
+    """Collect every ``"path"`` value in a parsed VDF tree, in order."""
     if isinstance(node, dict):
         for key, value in node.items():
             if key == "path" and isinstance(value, str) and value:
@@ -279,8 +364,16 @@ def library_paths_from_vdf(steam_root: Path) -> list[Path]:
 
 
 def discover_steam_roots(extra_roots: list[Path] | None = None) -> list[Path]:
-    """Default roots plus any libraries their VDF files declare."""
-    roots = list(extra_roots) if extra_roots else default_steam_roots()
+    """User-supplied roots first, then defaults, then VDF-declared libraries.
+
+    Extra roots are *additive*: passing ``--steam-root`` for one custom
+    library must never silently drop the Program Files, registry, and
+    default locations a user did not mention.
+    """
+    roots: list[Path] = []
+    for root in list(extra_roots or []) + default_steam_roots():
+        if root not in roots:
+            roots.append(root)
     expanded: list[Path] = []
     for root in roots:
         if root not in expanded:
@@ -297,9 +390,10 @@ def discover_steam_roots(extra_roots: list[Path] | None = None) -> list[Path]:
 def find_steam_saved_games_locations(user_profile: Path | None = None) -> list[SaveLocation]:
     """Locations under ``Saved Games\\Remnant2\\Steam``.
 
-    Each numeric child directory (one per Steam account) is its own
-    location. If there are no numeric children but the ``Steam`` folder
-    itself holds save files, the folder itself is the location.
+    Each numeric child directory (one per Steam account) that holds
+    files is its own location. If there are no numeric children with
+    files but the ``Steam`` folder itself holds save files, the folder
+    itself is the location. Empty folders are not locations.
     """
     profile = user_profile if user_profile is not None else default_user_profile()
     steam_dir = profile / "Saved Games" / STEAM_GAME_FOLDER / "Steam"
@@ -308,21 +402,33 @@ def find_steam_saved_games_locations(user_profile: Path | None = None) -> list[S
     locations: list[SaveLocation] = []
     for child in _safe_listdir(steam_dir):
         if child.is_dir() and child.name.isdigit():
-            locations.append(SaveLocation(platform="steam", path=child, files=_save_files(child)))
+            files = _save_files(child)
+            if files:
+                locations.append(SaveLocation(platform="steam", path=child, files=files))
     if not locations:
         files = _save_files(steam_dir)
-        locations.append(SaveLocation(platform="steam", path=steam_dir, files=files))
+        if files:
+            locations.append(SaveLocation(platform="steam", path=steam_dir, files=files))
     return locations
 
 
 def _userdata_save_location(userdata_dir: Path, user_id: str) -> SaveLocation | None:
+    """The save location for one userdata account, or ``None``.
+
+    ``remote/SAVED/SaveGames`` wins when it holds files. Otherwise the
+    ``remote`` folder itself is the location, but only when it holds
+    files: an empty ``remote`` (or an empty nested folder) is not a
+    location, even though the directory exists.
+    """
     remote = userdata_dir / user_id / STEAM_APP_ID / "remote"
     nested = remote / "SAVED" / "SaveGames"
     if nested.is_dir():
-        return SaveLocation(platform="steam", path=nested, files=_save_files(nested))
+        nested_files = _save_files(nested)
+        if nested_files:
+            return SaveLocation(platform="steam", path=nested, files=nested_files)
     if remote.is_dir():
         files = _save_files(remote)
-        if files or nested.exists():
+        if files:
             return SaveLocation(platform="steam", path=remote, files=files)
     return None
 
@@ -337,9 +443,9 @@ def find_steam_userdata_locations(steam_roots: list[Path] | None = None) -> list
         for user_dir in _safe_listdir(userdata_dir):
             if user_dir.is_dir() and user_dir.name.isdigit():
                 location = _userdata_save_location(userdata_dir, user_dir.name)
-                if location is not None and location not in locations:
+                if location is not None:
                     locations.append(location)
-    return locations
+    return _dedupe_by_path(locations)
 
 
 def find_steam_locations(
@@ -348,32 +454,34 @@ def find_steam_locations(
 ) -> list[SaveLocation]:
     """All Steam save locations, Saved Games first, then userdata."""
     found = find_steam_saved_games_locations(user_profile)
-    for location in find_steam_userdata_locations(steam_roots):
-        if location not in found:
-            found.append(location)
-    return found
+    found.extend(find_steam_userdata_locations(steam_roots))
+    return _dedupe_by_path(found)
 
 
 # --- Xbox / WGS ----------------------------------------------------------
 
 
-def find_wgs_directory(
+def find_wgs_directories(
     packages_dir: Path | None = None,
     keyword: str = WGS_PACKAGE_KEYWORD,
-) -> Path | None:
-    """The ``SystemAppData\\wgs`` directory for the Remnant 2 package.
+) -> list[Path]:
+    """Every matching ``SystemAppData\\wgs`` directory, best first.
 
     An explicitly given *packages_dir* is searched on any platform, so a
     copied ``Packages`` tree can be inspected on Linux or macOS. When
     no directory is given, the search only runs where WGS actually
-    lives (Windows, via ``%LOCALAPPDATA%``).
+    lives (Windows, via ``%LOCALAPPDATA%``). Directories that actually
+    hold containers come first, so another Perfect World package with
+    only a ``t`` folder never shadows the Remnant 2 one, but no
+    matching directory is dropped: callers that used to see only the
+    first one were silently losing saves from a second package.
     """
     if packages_dir is None:
         if os.name != "nt":
-            return None
+            return []
         packages_dir = default_packages_dir()
     if packages_dir is None or not packages_dir.is_dir():
-        return None
+        return []
     needle = keyword.lower()
     candidates: list[Path] = []
     for package_dir in _safe_listdir(packages_dir):
@@ -381,13 +489,22 @@ def find_wgs_directory(
             wgs_dir = package_dir / "SystemAppData" / "wgs"
             if wgs_dir.is_dir():
                 candidates.append(wgs_dir)
-    # Prefer a wgs directory that actually holds containers: another
-    # Perfect World package with only a ``t`` folder must not shadow
-    # the Remnant 2 one.
-    for candidate in candidates:
-        if list_wgs_containers(candidate):
-            return candidate
-    return candidates[0] if candidates else None
+    with_containers = [candidate for candidate in candidates if list_wgs_containers(candidate)]
+    without_containers = [candidate for candidate in candidates if candidate not in with_containers]
+    return with_containers + without_containers
+
+
+def find_wgs_directory(
+    packages_dir: Path | None = None,
+    keyword: str = WGS_PACKAGE_KEYWORD,
+) -> Path | None:
+    """The best matching ``SystemAppData\\wgs`` directory, or ``None``.
+
+    Kept for backwards compatibility; prefer :func:`find_wgs_directories`
+    when a second matching package may hold saves.
+    """
+    directories = find_wgs_directories(packages_dir, keyword)
+    return directories[0] if directories else None
 
 
 def list_wgs_containers(wgs_directory: Path) -> list[Path]:
@@ -412,22 +529,37 @@ def find_wgs_containers(
     packages_dir: Path | None = None,
     keyword: str = WGS_PACKAGE_KEYWORD,
 ) -> list[WgsContainer]:
-    """Inspected containers for the Remnant 2 WGS directory, if found."""
-    wgs_directory = find_wgs_directory(packages_dir, keyword)
-    if wgs_directory is None:
-        return []
-    return [inspect_wgs_container(path) for path in list_wgs_containers(wgs_directory)]
+    """Inspected containers for every matching WGS directory, if found."""
+    containers: list[WgsContainer] = []
+    for wgs_directory in find_wgs_directories(packages_dir, keyword):
+        containers.extend(inspect_wgs_container(path) for path in list_wgs_containers(wgs_directory))
+    return containers
 
 
 def find_wgs_locations(
     packages_dir: Path | None = None,
     keyword: str = WGS_PACKAGE_KEYWORD,
 ) -> list[SaveLocation]:
-    """WGS save sets as :class:`SaveLocation` objects for shared display."""
+    """WGS save sets as :class:`SaveLocation` objects for shared display.
+
+    ``size_bytes`` for a WGS location is the set's recursive total (via
+    ``total_size_bytes``), matching the container view, even though
+    ``files`` lists only the top-level extensionless blobs. A set with
+    no listed files and a zero total is empty and is not reported.
+    """
     locations: list[SaveLocation] = []
     for container in find_wgs_containers(packages_dir, keyword):
         for save_set in container.save_sets:
-            locations.append(SaveLocation(platform="xbox-wgs", path=save_set.path, files=save_set.files))
+            if not save_set.files and save_set.size_bytes == 0:
+                continue
+            locations.append(
+                SaveLocation(
+                    platform="xbox-wgs",
+                    path=save_set.path,
+                    files=save_set.files,
+                    total_size_bytes=save_set.size_bytes,
+                )
+            )
     return locations
 
 

@@ -6,7 +6,7 @@ test:
 lint:
 	ruff check src tests
 	ruff format --check src tests
-	mypy src
+	mypy src tests
 
 # Find the fictional demo saves bundled under examples/demo.
 find-demo:

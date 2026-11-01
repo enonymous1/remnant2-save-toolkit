@@ -42,6 +42,10 @@ NO_CONVERSION_NOTE = (
     "This tool finds and backs up saves. It does not convert a Steam save "
     "to Xbox format, or an Xbox save to Steam format."
 )
+CLOSE_GAME_NOTE = (
+    "Close the game before backing up a real save: a backup taken while "
+    "the game is running can capture a half-written save pair."
+)
 
 
 def _populate_results(list_widget: QListWidget, locations: list[SaveLocation]) -> None:
@@ -85,7 +89,9 @@ class FinderScreen(QWidget):
         note.setWordWrap(True)
         layout.addWidget(note)
 
-        self.find_button = QPushButton("Find saves")
+        close_game = QLabel(CLOSE_GAME_NOTE)
+        close_game.setWordWrap(True)
+        layout.addWidget(close_game)
         self.find_button.clicked.connect(self._on_find)
         layout.addWidget(self.find_button)
 
@@ -153,8 +159,8 @@ class MainWindow(QMainWindow):
         self.nav_drawer = QListWidget()
         self.nav_drawer.setFixedWidth(150)
         self.nav_drawer.addItem("Home")
-        self.nav_drawer.addItem("XBOX >>> STEAM")
-        self.nav_drawer.addItem("STEAM >>> XBOX")
+        self.nav_drawer.addItem("Xbox (WGS) saves")
+        self.nav_drawer.addItem("Steam saves")
         self.nav_drawer.currentRowChanged.connect(self.navigate)
         splitter.addWidget(self.nav_drawer)
         splitter.setCollapsible(0, False)
@@ -165,17 +171,17 @@ class MainWindow(QMainWindow):
         self.main_screen = self._build_home_screen()
         self.stacked_widget.addWidget(self.main_screen)
 
-        self.xbox_to_steam_screen = FinderScreen(
-            "Xbox to Steam",
+        self.xbox_screen = FinderScreen(
+            "Xbox (WGS) saves",
             lambda: find_wgs_locations(self._packages_dir),
         )
-        self.stacked_widget.addWidget(self.xbox_to_steam_screen)
+        self.stacked_widget.addWidget(self.xbox_screen)
 
-        self.steam_to_xbox_screen = FinderScreen(
-            "Steam to Xbox",
+        self.steam_screen = FinderScreen(
+            "Steam saves",
             lambda: find_steam_locations(self._user_profile, self._steam_roots),
         )
-        self.stacked_widget.addWidget(self.steam_to_xbox_screen)
+        self.stacked_widget.addWidget(self.steam_screen)
 
     def _build_home_screen(self) -> QWidget:
         screen = QWidget()
@@ -219,28 +225,35 @@ class MainWindow(QMainWindow):
     def show_main_screen(self) -> None:
         self.stacked_widget.setCurrentWidget(self.main_screen)
 
-    def show_xbox_to_steam_screen(self) -> None:
-        self.stacked_widget.setCurrentWidget(self.xbox_to_steam_screen)
+    def show_xbox_screen(self) -> None:
+        self.stacked_widget.setCurrentWidget(self.xbox_screen)
 
-    def show_steam_to_xbox_screen(self) -> None:
-        self.stacked_widget.setCurrentWidget(self.steam_to_xbox_screen)
+    def show_steam_screen(self) -> None:
+        self.stacked_widget.setCurrentWidget(self.steam_screen)
 
     def navigate(self, index: int) -> None:
         if index == 0:
             self.show_main_screen()
         elif index == 1:
-            self.show_xbox_to_steam_screen()
+            self.show_xbox_screen()
         elif index == 2:
-            self.show_steam_to_xbox_screen()
+            self.show_steam_screen()
 
 
 def run_gui(
     user_profile: Path | None = None,
     steam_roots: list[Path] | None = None,
     packages_dir: Path | None = None,
+    argv: list[str] | None = None,
 ) -> int:
-    """Create the application, show the main window, and run the event loop."""
-    app = QApplication(sys.argv)
+    """Create the application, show the main window, and run the event loop.
+
+    ``argv`` defaults to ``sys.argv`` for the CLI, but is a parameter so
+    tests and embedders can start the GUI without touching global state.
+    Reuses an existing application instance instead of creating a
+    second one, which Qt rejects.
+    """
+    app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     window = MainWindow(user_profile, steam_roots, packages_dir)
     window.show()
     return int(app.exec())

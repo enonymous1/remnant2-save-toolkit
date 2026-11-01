@@ -21,7 +21,7 @@ def app(monkeypatch: pytest.MonkeyPatch) -> QApplication:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     existing = QApplication.instance()
     if existing is not None:
-        return existing  # type: ignore[return-value]
+        return existing
     return QApplication([])
 
 
@@ -32,21 +32,26 @@ def window(app: QApplication, steam_home: Path, wgs_packages: Path) -> MainWindo
 
 def test_window_has_three_nav_items_and_status_labels(window: MainWindow) -> None:
     assert window.nav_drawer.count() == 3
+    assert [window.nav_drawer.item(row).text() for row in range(3)] == [
+        "Home",
+        "Xbox (WGS) saves",
+        "Steam saves",
+    ]
     assert window.home_status_label.text() == "No search run yet."
-    assert window.xbox_to_steam_screen.status_label.text() == "No search run yet."
-    assert window.steam_to_xbox_screen.status_label.text() == "No search run yet."
+    assert window.xbox_screen.status_label.text() == "No search run yet."
+    assert window.steam_screen.status_label.text() == "No search run yet."
 
 
 def test_xbox_screen_finds_wgs_saves(window: MainWindow) -> None:
-    window.xbox_to_steam_screen.find_button.click()
-    assert window.xbox_to_steam_screen.results.count() == 1
-    assert "Found 1 save location(s)." in window.xbox_to_steam_screen.status_label.text()
+    window.xbox_screen.find_button.click()
+    assert window.xbox_screen.results.count() == 1
+    assert "Found 1 save location(s)." in window.xbox_screen.status_label.text()
 
 
 def test_steam_screen_finds_steam_saves(window: MainWindow) -> None:
-    window.steam_to_xbox_screen.find_button.click()
-    assert window.steam_to_xbox_screen.results.count() == 1
-    assert "76561198000000001" in window.steam_to_xbox_screen.results.item(0).text()
+    window.steam_screen.find_button.click()
+    assert window.steam_screen.results.count() == 1
+    assert "76561198000000001" in window.steam_screen.results.item(0).text()
 
 
 def test_home_finds_both_platforms(window: MainWindow) -> None:
@@ -57,16 +62,16 @@ def test_home_finds_both_platforms(window: MainWindow) -> None:
 
 def test_navigate_switches_screens(window: MainWindow) -> None:
     window.navigate(1)
-    assert window.stacked_widget.currentWidget() is window.xbox_to_steam_screen
+    assert window.stacked_widget.currentWidget() is window.xbox_screen
     window.navigate(2)
-    assert window.stacked_widget.currentWidget() is window.steam_to_xbox_screen
+    assert window.stacked_widget.currentWidget() is window.steam_screen
     window.navigate(0)
     assert window.stacked_widget.currentWidget() is window.main_screen
 
 
 def test_backup_without_selection_asks_for_selection(window: MainWindow) -> None:
-    window.steam_to_xbox_screen.backup_button.click()
-    assert "Select a save location first" in window.steam_to_xbox_screen.status_label.text()
+    window.steam_screen.backup_button.click()
+    assert "Select a save location first" in window.steam_screen.status_label.text()
 
 
 def test_backup_selected_creates_verified_backup(
@@ -83,7 +88,7 @@ def test_backup_selected_creates_verified_backup(
         "getExistingDirectory",
         staticmethod(lambda *args, **kwargs: str(backup_root)),
     )
-    screen = window.steam_to_xbox_screen
+    screen = window.steam_screen
     screen.find_button.click()
     screen.results.setCurrentRow(0)
     screen.backup_button.click()
@@ -96,6 +101,6 @@ def test_backup_selected_creates_verified_backup(
 def test_no_conversion_note_is_visible(window: MainWindow) -> None:
     from PyQt6.QtWidgets import QLabel
 
-    for screen in (window.xbox_to_steam_screen, window.steam_to_xbox_screen):
+    for screen in (window.xbox_screen, window.steam_screen):
         texts = [label.text() for label in screen.findChildren(QLabel)]
         assert any(NO_CONVERSION_NOTE in text for text in texts)
